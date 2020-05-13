@@ -1,0 +1,164 @@
+- hosts: localhost
+  gather_facts: no
+
+# Check for package installations
+  tasks:
+   - name: Check for qemu-kvm
+     apt:
+       name: qemu-kvm
+       state: present
+
+   - name: Check for libvirt and ovs packages
+     apt:
+      name: "{{ item }}"
+      state: present
+     with_items:
+       - libvirt-bin
+       - virtinst
+       - virt-viewer
+       - virt-manager
+       - openvswitch-switch
+
+# Creation of OVS network infrastructure
+   - name: Create an OvS bridge T1br1, which would be used to connect to internet (NAT/DHCP mode)
+     openvswitch_bridge:
+      bridge: T1br1
+      state: present
+
+   - name: Create an OvS bridge T1br2, which would be part of l2 network (bridge)
+     openvswitch_bridge:
+      bridge: T1br2
+      state: present
+
+# Define the two networks, which would be in DHCP mode
+   - name: Define network t1br1
+     virt_net:
+      command: define
+      name: t1br1
+      xml: '{{ lookup("template", "t1br1.xml") }}'
+      state: present
+
+   - name: Define network t1br2
+     virt_net:
+      command: define
+      name: t1br2
+      xml: '{{ lookup("template", "t1br2.xml") }}'
+      state: present
+
+# Start the two networks
+   - name: Start network - t1br1
+     virt_net:
+      command: create
+      name: t1br1
+      state: active
+
+   - name: Start network - t1br2
+     virt_net:
+      command: create
+      name: t1br2
+      state: active
+
+# Put T1br1 and T2br2 bridges in DHCP mode
+   - name: Assign IP address to interface of bridge T1br1
+     command: sudo ip addr add 10.0.10.1/24 dev T1br1
+
+   - name: Assign IP address to interface of bridge T1br2
+     command: sudo ip addr add 10.0.11.1/24 dev T1br2
+
+   - name: Bring interface T1br1 UP
+     command: sudo ip link set dev T1br1 up
+
+   - name: Bring interface T1br2 UP
+     command: sudo ip link set dev T1br2 up
+
+   - name: Make T1br1 bridge's interface a DHCP server
+     command: sudo dnsmasq --interface=T1br1 --except-interface=lo --bind-interface --dhcp-range=10.0.10.2,10.0.10.254,255.255.255.0,infinite
+
+   - name: Make T1br2 bridge's interface a DHCP server
+     command: sudo dnsmasq --interface=T1br2 --except-interface=lo --bind-interface --dhcp-range=10.0.11.2,10.0.11.254,255.255.255.0,infinite
+
+# Create network namespaces
+   - name: Create tenant 1 network namespace ns1-1
+     command: sudo ip netns add ns1-1
+
+   - name: Create tenant1 network namespace ns1-2
+     command: sudo ip netns add ns1-2
+
+   - name: Create provider's network namespace ns-p
+     command: sudo ip netns add ns-p
+
+# Create veth pairs
+   - name: Create veth pair to be used between ns1-1 and T1br1
+     command: sudo ip link add veth-ns1-1 type veth peer name veth-t1br1-t
+
+   - name: Create veth pair to be used between ns1-2 and T1br2
+     command: sudo ip link add veth-ns1-2 type veth peer name veth-t1br2-t
+
+   - name: Create veth pair to be used between T1br1 and provider namespace
+     command: sudo ip link add veth-t1br1-p type veth peer name veth-nsp-1
+
+   - name: Create veth pair to be used between T1br2 and provider namespace
+     command: sudo ip link add veth-t1br2-p type veth peer name veth-nsp-2
+
+# Attach interfaces to approrpiate namespaces and devices
+   - name: Attach veth-ns1-1 to ns1-1
+     command: sudo ip link set veth-ns1-1 netns ns1-1
+
+   - name: Attach veth-t1br1-t to T1br1
+     command: sudo ovs-vsctl add-port T1br1 veth-t1br1-t
+
+   - name: Attach veth-t1br1-p to T1br1
+     command: sudo ovs-vsctl add-port T1br1 veth-t1br1-p
+
+   - name: Attach veth-nsp-1 to provider namespace
+     command: sudo ip link set veth-nsp-1 netns ns-p
+
+   - name: Attach veth-nsp-2 to provider namespace
+     command: sudo ip link set veth-nsp-2 netns ns-p
+
+   - name: Attach veth-t1br2-p to T1br2
+     command: sudo ovs-vsctl add-port T1br2 veth-t1br2-p
+
+   - name: Attach veth-t1br2-t to T1br2
+     command: sudo ovs-vsctl add-port T1br2 veth-t1br2-t
+
+   - name: Attach veth-ns1-2 to ns1-2
+     command: sudo ip link set veth-ns1-2 netns ns1-2
+
+# Bring the interfaces up
+   - name: Bring veth-ns1-1 UP
+     command: sudo ip netns exec ns1-1 ip link set dev veth-ns1-1 up
+
+   - name: Bring veth-t1br1-t on T1br1 UP
+     command: sudo ip link set dev veth-t1br1-t up
+
+   - name: Bring veth-t1br1-p on T1br1 UP
+     command: sudo ip link set dev veth-t1br1-p up
+
+   - name: Bring veth-nsp-1 UP
+     command: sudo ip netns exec ns-p ip link set dev veth-nsp-1 up
+
+   - name: Bring veth-nsp-2 UP
+     command: sudo ip netns exec ns-p ip link set dev veth-nsp-2 up
+
+   - name: Bring veth-t1br2-p on T1br2 UP
+     command: sudo ip link set dev veth-t1br2-p up
+
+   - name: Bring veth-t1br2-t on T1br2 UP
+     command: sudo ip link set dev veth-t1br2-t up
+
+   - name: Bring veth-ns1-2 UP
+     command: sudo ip netns exec ns1-2 ip link set dev veth-ns1-2 up
+
+# Get IP addresses from DHCP server for the namespaces
+   - name: Get IP address for ns1-1 from DHCP server on T1br1
+     command: sudo ip netns exec ns1-1 dhclient veth-ns1-1
+
+   - name: Get IP address for ns-p from DHCP server on T1br1
+     command: sudo ip netns exec ns-p dhclient veth-nsp-1
+
+   - name: Get IP address for ns-p from DHCP server on T1br2
+     command: sudo ip netns exec ns-p dhclient veth-nsp-2
+
+   - name: Get IP address for ns1-2 from DHCP server on T1br2
+     command: sudo ip netns exec ns1-2 dhclient veth-ns1-2

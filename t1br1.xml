@@ -1,0 +1,6 @@
+<network>
+  <name>t1br1</name>
+  <forward mode='bridge'/>
+  <bridge name='T1br1'/>
+  <virtualport type='openvswitch'/>
+</network>

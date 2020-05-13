@@ -1,0 +1,1 @@
+{"tenant1": [{"Device ID": "veth-br40-C1", "IP Address": "10.0.40.2\n", "name": "Container1", "MAC Address": "5e:52:1f:cb:5d:78\n"}, {"Device ID": "veth-br140-C2", "IP Address": "10.0.140.3\n", "name": "Container2", "MAC Address": "b2:7c:3a:88:f7:6f\n"}]}
